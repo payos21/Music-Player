@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rosales Music Player</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <h2>🎶 Music Player</h2>
+    <button id="openModalBtn">Upload Music</button>
+  </div>
+
+  <!-- Main Content -->
+  <div class="content">
+    <h1>Rosales Music Player</h1>
+
+    <!-- Modal for Upload Form -->
+    <div id="uploadModal" class="modal">
+      <div class="modal-content">
+        <span class="modal-close" id="closeModalBtn">&times;</span>
+        <h2>Upload Music</h2>
+        <form id="uploadForm">
+          <input type="text" id="title" placeholder="Song Title" required><br>
+          <input type="text" id="artist" placeholder="Artist Name" required><br>
+          <input type="file" id="file" accept=".mp3" required><br>
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+    </div>
+
+    <hr>
+
+    <h2>📃 Playlist</h2>
+    <div id="songList"></div>
+    <audio id="audioPlayer" controls></audio>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    const supabaseUrl = 'https://yyoguxqfnifvykzbfbyk.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl5b2d1eHFmbmlmdnlremJmYnlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk4OTExOTQsImV4cCI6MjA3NTQ2NzE5NH0.H8Xi91zo7RDszhOmEMh0o8vbGETfS0Xs3_A1MuUaaPg';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const form = document.getElementById('uploadForm');
+    const audioPlayer = document.getElementById('audioPlayer');
+    const songList = document.getElementById('songList');
+    const uploadModal = document.getElementById('uploadModal');
+    const openModalBtn = document.getElementById('openModalBtn');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+    let currentSong = null;
+
+    // Show modal on button click
+    openModalBtn.onclick = () => {
+      uploadModal.classList.add('open');
+    };
+
+    // Close modal on close button click
+    closeModalBtn.onclick = () => {
+      uploadModal.classList.remove('open');
+    };
+
+    // 🔼 Upload form logic
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+
+      const title = document.getElementById('title').value.trim();
+      const artist = document.getElementById('artist').value.trim();
+      const file = document.getElementById('file').files[0];
+
+      if (!file || !title || !artist) {
+        alert("Please fill all fields and select a file.");
+        return;
+      }
+
+      const filePath = `music/${Date.now()}_${file.name}`;
+
+      // Upload the file to Supabase storage
+      const { error: uploadError } = await supabase.storage
+        .from('music')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        alert("Upload failed: " + uploadError.message);
+        return;
+      }
+
+      // Insert metadata into the 'songs' table
+      const { error: dbError } = await supabase
+        .from('songs')
+        .insert([{ title, artist, file_path: filePath }]);
+
+      if (dbError) {
+        alert("Database insert failed: " + dbError.message);
+        return;
+      }
+
+      alert("Uploaded successfully!");
+      form.reset();
+      loadSongs(); // Reload the list of songs
+      uploadModal.classList.remove('open'); // Close the modal after upload
+    };
+
+    let currentSongElement = null; // Track the current song element with the 'playing' class
+
+    // Load songs and display them
+    async function loadSongs() {
+    songList.innerHTML = "Loading...";
+
+    const { data: songs, error } = await supabase
+        .from('songs')
+        .select('*')
+        .order('title', { ascending: true });
+
+    if (error) {
+        songList.innerHTML = "Failed to load songs.";
+        console.error(error);
+        return;
+    }
+
+    songList.innerHTML = "";
+
+    songs.forEach(song => {
+        const div = document.createElement('div');
+        div.className = 'song';
+        div.textContent = `${song.title} — ${song.artist}`;
+        div.id = song.id;
+
+        // Highlight the currently playing song
+        if (currentSong && currentSong.id === song.id) {
+        div.classList.add('playing');
+        currentSongElement = div; // Track the currently playing song element
+        }
+
+        // Play song when clicked
+        div.onclick = () => {
+        console.log('Playing:', song.title);
+
+        const { data: publicUrlData } = supabase
+            .storage
+            .from('music')
+            .getPublicUrl(song.file_path);
+
+        audioPlayer.src = publicUrlData.publicUrl;
+        audioPlayer.play();
+
+        // If there's a previously highlighted song, remove the highlight
+        if (currentSongElement) {
+            currentSongElement.classList.remove('playing');
+        }
+
+        // Highlight the new song
+        div.classList.add('playing');
+        currentSongElement = div; // Set the current song element to the newly clicked song
+
+        currentSong = song; // Track the song object (for future reference, like when it's deleted)
+        };
+
+        // Delete song logic
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.onclick = async (e) => {
+        e.stopPropagation(); // Prevent song click from triggering play
+
+        const { error: deleteError } = await supabase
+            .from('songs')
+            .delete()
+            .eq('id', song.id);
+
+        if (deleteError) {
+            alert("Error deleting song: " + deleteError.message);
+            return;
+        }
+
+        // Delete from storage
+        const { error: storageError } = await supabase
+            .storage
+            .from('music')
+            .remove([song.file_path]);
+
+        if (storageError) {
+            alert("Error deleting song from storage: " + storageError.message);
+            return;
+        }
+
+        // Stop playing if the deleted song was the one playing
+        if (currentSong && currentSong.id === song.id) {
+            audioPlayer.pause();
+            audioPlayer.src = ''; // Reset the audio source
+            currentSong = null;
+            currentSongElement.classList.remove('playing'); // Remove the highlight if song was deleted
+            currentSongElement = null; // Reset the current song element
+        }
+
+        loadSongs(); // Reload the songs list
+        };
+
+        div.appendChild(deleteBtn);
+        songList.appendChild(div);
+    });
+    }
+
+    loadSongs(); // Load the songs when the page is loaded
+
+  </script>
+</body>
+</html>
